@@ -1,0 +1,487 @@
+-- ============================================================
+-- E-COMMERCE ORDER MANAGEMENT SYSTEM
+-- SQL Project Script - MySQL 8.0+
+-- ============================================================
+
+DROP DATABASE IF EXISTS ecommerce_order_management;
+CREATE DATABASE ecommerce_order_management;
+USE ecommerce_order_management;
+
+-- ============================================================
+-- 1. USERS
+-- ============================================================
+CREATE TABLE users (
+    user_id INT AUTO_INCREMENT PRIMARY KEY,
+    full_name VARCHAR(100) NOT NULL,
+    email VARCHAR(150) NOT NULL UNIQUE,
+    phone VARCHAR(15),
+    password_hash VARCHAR(255) NOT NULL,
+    address VARCHAR(255),
+    city VARCHAR(80),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================
+-- 2. CATEGORIES
+-- ============================================================
+CREATE TABLE categories (
+    category_id INT AUTO_INCREMENT PRIMARY KEY,
+    category_name VARCHAR(80) NOT NULL UNIQUE,
+    description VARCHAR(255)
+);
+
+-- ============================================================
+-- 3. PRODUCTS
+-- ============================================================
+CREATE TABLE products (
+    product_id INT AUTO_INCREMENT PRIMARY KEY,
+    category_id INT NOT NULL,
+    product_name VARCHAR(150) NOT NULL,
+    price DECIMAL(10,2) NOT NULL CHECK (price >= 0),
+    stock_quantity INT NOT NULL DEFAULT 0 CHECK (stock_quantity >= 0),
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_product_category
+        FOREIGN KEY (category_id) REFERENCES categories(category_id)
+);
+
+-- ============================================================
+-- 4. ORDERS
+-- ============================================================
+CREATE TABLE orders (
+    order_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status ENUM('Pending','Confirmed','Shipped','Delivered','Cancelled')
+        DEFAULT 'Pending',
+    total_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+    shipping_address VARCHAR(255) NOT NULL,
+    CONSTRAINT fk_order_user
+        FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+
+-- ============================================================
+-- 5. ORDER ITEMS
+-- ============================================================
+CREATE TABLE order_items (
+    order_item_id INT AUTO_INCREMENT PRIMARY KEY,
+    order_id INT NOT NULL,
+    product_id INT NOT NULL,
+    quantity INT NOT NULL CHECK (quantity > 0),
+    unit_price DECIMAL(10,2) NOT NULL CHECK (unit_price >= 0),
+    subtotal DECIMAL(12,2) GENERATED ALWAYS AS (quantity * unit_price) STORED,
+    CONSTRAINT fk_item_order
+        FOREIGN KEY (order_id) REFERENCES orders(order_id)
+        ON DELETE CASCADE,
+    CONSTRAINT fk_item_product
+        FOREIGN KEY (product_id) REFERENCES products(product_id)
+);
+
+-- ============================================================
+-- 6. PAYMENTS
+-- ============================================================
+CREATE TABLE payments (
+    payment_id INT AUTO_INCREMENT PRIMARY KEY,
+    order_id INT NOT NULL,
+    payment_method ENUM('UPI','Card','NetBanking','COD','Wallet') NOT NULL,
+    transaction_ref VARCHAR(100) UNIQUE,
+    amount DECIMAL(12,2) NOT NULL CHECK (amount >= 0),
+    payment_status ENUM('Pending','Paid','Failed','Refunded') DEFAULT 'Pending',
+    paid_at TIMESTAMP NULL,
+    CONSTRAINT fk_payment_order
+        FOREIGN KEY (order_id) REFERENCES orders(order_id)
+        ON DELETE CASCADE
+);
+
+-- ============================================================
+-- 7. ORDER STATUS LOG / AUDIT TABLE
+-- ============================================================
+CREATE TABLE order_status_log (
+    log_id INT AUTO_INCREMENT PRIMARY KEY,
+    order_id INT NOT NULL,
+    old_status VARCHAR(30),
+    new_status VARCHAR(30) NOT NULL,
+    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_log_order
+        FOREIGN KEY (order_id) REFERENCES orders(order_id)
+        ON DELETE CASCADE
+);
+
+-- ============================================================
+-- SAMPLE DATA
+-- ============================================================
+
+INSERT INTO users (full_name, email, phone, password_hash, address, city)
+VALUES
+('Archita Malhotra','archita@example.com','9876543210','demo_hash_1',
+ 'Kasturba Gandhi Marg','Delhi'),
+('Bhumika Sharma','bhumika@example.com','9876543211','demo_hash_2',
+ 'Laxmi Nagar','Delhi'),
+('Shobhita Singh','shobhita@example.com','9876543212','demo_hash_3',
+ 'Preet Vihar','Delhi'),
+('Riya Kapoor','riya@example.com','9876543213','demo_hash_4',
+ 'Noida Sector 18','Noida');
+
+INSERT INTO categories (category_name, description)
+VALUES
+('Electronics','Electronic gadgets and accessories'),
+('Fashion','Clothing and fashion products'),
+('Beauty','Beauty and personal care products');
+
+INSERT INTO products (category_id, product_name, price, stock_quantity)
+VALUES
+(1,'Wireless Headphones',2499.00,50),
+(1,'Smart Watch',3999.00,30),
+(1,'USB-C Cable',499.00,100),
+(2,'Oversized T-Shirt',999.00,75),
+(2,'Denim Jacket',2499.00,25),
+(3,'Face Serum',799.00,60),
+(3,'Lip Balm',299.00,120);
+
+INSERT INTO orders (user_id, status, shipping_address)
+VALUES
+(1,'Confirmed','Kasturba Gandhi Marg, Delhi'),
+(2,'Delivered','Laxmi Nagar, Delhi'),
+(3,'Pending','Preet Vihar, Delhi');
+
+INSERT INTO order_items (order_id, product_id, quantity, unit_price)
+VALUES
+(1,1,1,2499.00),
+(1,3,2,499.00),
+(2,4,2,999.00),
+(2,7,1,299.00),
+(3,6,1,799.00);
+
+INSERT INTO payments
+(order_id, payment_method, transaction_ref, amount, payment_status, paid_at)
+VALUES
+(1,'UPI','TXN10001',3497.00,'Paid',CURRENT_TIMESTAMP),
+(2,'Card','TXN10002',2297.00,'Paid',CURRENT_TIMESTAMP),
+(3,'COD','TXN10003',799.00,'Pending',NULL);
+
+-- ============================================================
+-- TRIGGER 1: AUTOMATICALLY UPDATE ORDER TOTAL
+-- ============================================================
+DELIMITER $$
+
+CREATE TRIGGER trg_order_item_after_insert
+AFTER INSERT ON order_items
+FOR EACH ROW
+BEGIN
+    UPDATE orders
+    SET total_amount = (
+        SELECT COALESCE(SUM(subtotal),0)
+        FROM order_items
+        WHERE order_id = NEW.order_id
+    )
+    WHERE order_id = NEW.order_id;
+END$$
+
+DELIMITER ;
+
+-- Recalculate totals for sample orders
+UPDATE orders o
+SET total_amount = (
+    SELECT COALESCE(SUM(oi.subtotal),0)
+    FROM order_items oi
+    WHERE oi.order_id = o.order_id
+);
+
+-- ============================================================
+-- TRIGGER 2: LOG ORDER STATUS CHANGES
+-- ============================================================
+DELIMITER $$
+
+CREATE TRIGGER trg_order_status_change
+AFTER UPDATE ON orders
+FOR EACH ROW
+BEGIN
+    IF OLD.status <> NEW.status THEN
+        INSERT INTO order_status_log(order_id, old_status, new_status)
+        VALUES (NEW.order_id, OLD.status, NEW.status);
+    END IF;
+END$$
+
+DELIMITER ;
+
+-- ============================================================
+-- STORED PROCEDURE 1: GET USER ORDER HISTORY
+-- ============================================================
+DELIMITER $$
+
+CREATE PROCEDURE sp_GetUserOrders(IN p_user_id INT)
+BEGIN
+    SELECT
+        o.order_id,
+        o.order_date,
+        o.status,
+        o.total_amount,
+        o.shipping_address
+    FROM orders o
+    WHERE o.user_id = p_user_id
+    ORDER BY o.order_date DESC;
+END$$
+
+DELIMITER ;
+
+-- ============================================================
+-- STORED PROCEDURE 2: CREATE AN ORDER WITH TRANSACTION
+-- Checks stock before creating the order.
+-- ============================================================
+DELIMITER $$
+
+CREATE PROCEDURE sp_CreateOrder(
+    IN p_user_id INT,
+    IN p_product_id INT,
+    IN p_quantity INT,
+    IN p_shipping_address VARCHAR(255),
+    IN p_payment_method VARCHAR(20)
+)
+BEGIN
+    DECLARE v_stock INT DEFAULT 0;
+    DECLARE v_price DECIMAL(10,2) DEFAULT 0;
+    DECLARE v_order_id INT;
+
+    START TRANSACTION;
+
+    SELECT stock_quantity, price
+    INTO v_stock, v_price
+    FROM products
+    WHERE product_id = p_product_id
+      AND is_active = TRUE
+    FOR UPDATE;
+
+    IF v_stock < p_quantity THEN
+        ROLLBACK;
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Insufficient stock';
+    ELSE
+        INSERT INTO orders(user_id, status, shipping_address)
+        VALUES(p_user_id, 'Confirmed', p_shipping_address);
+
+        SET v_order_id = LAST_INSERT_ID();
+
+        INSERT INTO order_items(order_id, product_id, quantity, unit_price)
+        VALUES(v_order_id, p_product_id, p_quantity, v_price);
+
+        UPDATE products
+        SET stock_quantity = stock_quantity - p_quantity
+        WHERE product_id = p_product_id;
+
+        INSERT INTO payments(
+            order_id, payment_method, amount, payment_status
+        )
+        VALUES(
+            v_order_id,
+            p_payment_method,
+            v_price * p_quantity,
+            CASE
+                WHEN p_payment_method = 'COD' THEN 'Pending'
+                ELSE 'Paid'
+            END
+        );
+
+        COMMIT;
+
+        SELECT v_order_id AS new_order_id,
+               'Order created successfully' AS message;
+    END IF;
+END$$
+
+DELIMITER ;
+
+-- ============================================================
+-- INDEXES FOR PERFORMANCE
+-- ============================================================
+CREATE INDEX idx_products_category
+ON products(category_id);
+
+CREATE INDEX idx_products_name
+ON products(product_name);
+
+CREATE INDEX idx_orders_user_date
+ON orders(user_id, order_date);
+
+CREATE INDEX idx_orders_status
+ON orders(status);
+
+CREATE INDEX idx_order_items_order
+ON order_items(order_id);
+
+CREATE INDEX idx_payments_order
+ON payments(order_id);
+
+-- ============================================================
+-- 20 USEFUL REPORTING / RETRIEVAL QUERIES
+-- ============================================================
+
+-- Q1. Show all products
+SELECT * FROM products;
+
+-- Q2. Products with category names
+SELECT p.product_id, p.product_name, c.category_name,
+       p.price, p.stock_quantity
+FROM products p
+JOIN categories c ON p.category_id = c.category_id;
+
+-- Q3. Low-stock products
+SELECT product_id, product_name, stock_quantity
+FROM products
+WHERE stock_quantity < 30
+ORDER BY stock_quantity;
+
+-- Q4. All orders with customer names
+SELECT o.order_id, u.full_name, o.order_date,
+       o.status, o.total_amount
+FROM orders o
+JOIN users u ON o.user_id = u.user_id
+ORDER BY o.order_date DESC;
+
+-- Q5. Detailed order report
+SELECT
+    o.order_id,
+    u.full_name AS customer,
+    p.product_name,
+    oi.quantity,
+    oi.unit_price,
+    oi.subtotal
+FROM orders o
+JOIN users u ON o.user_id = u.user_id
+JOIN order_items oi ON o.order_id = oi.order_id
+JOIN products p ON oi.product_id = p.product_id
+ORDER BY o.order_id;
+
+-- Q6. Total sales
+SELECT SUM(total_amount) AS total_sales
+FROM orders
+WHERE status <> 'Cancelled';
+
+-- Q7. Sales by category
+SELECT
+    c.category_name,
+    SUM(oi.subtotal) AS category_sales
+FROM order_items oi
+JOIN products p ON oi.product_id = p.product_id
+JOIN categories c ON p.category_id = c.category_id
+JOIN orders o ON oi.order_id = o.order_id
+WHERE o.status <> 'Cancelled'
+GROUP BY c.category_id, c.category_name
+ORDER BY category_sales DESC;
+
+-- Q8. Top-selling products
+SELECT
+    p.product_name,
+    SUM(oi.quantity) AS units_sold,
+    SUM(oi.subtotal) AS revenue
+FROM order_items oi
+JOIN products p ON oi.product_id = p.product_id
+JOIN orders o ON oi.order_id = o.order_id
+WHERE o.status <> 'Cancelled'
+GROUP BY p.product_id, p.product_name
+ORDER BY units_sold DESC;
+
+-- Q9. Customer-wise spending
+SELECT
+    u.user_id,
+    u.full_name,
+    SUM(o.total_amount) AS total_spent
+FROM users u
+JOIN orders o ON u.user_id = o.user_id
+WHERE o.status <> 'Cancelled'
+GROUP BY u.user_id, u.full_name
+ORDER BY total_spent DESC;
+
+-- Q10. Customers with more than one order
+SELECT
+    u.full_name,
+    COUNT(o.order_id) AS total_orders
+FROM users u
+JOIN orders o ON u.user_id = o.user_id
+GROUP BY u.user_id, u.full_name
+HAVING COUNT(o.order_id) > 1;
+
+-- Q11. Pending payments
+SELECT p.payment_id, p.order_id, p.amount,
+       p.payment_method, p.payment_status
+FROM payments p
+WHERE p.payment_status = 'Pending';
+
+-- Q12. Orders above Rs. 2000
+SELECT order_id, user_id, total_amount
+FROM orders
+WHERE total_amount > 2000;
+
+-- Q13. Average order value
+SELECT ROUND(AVG(total_amount),2) AS average_order_value
+FROM orders
+WHERE status <> 'Cancelled';
+
+-- Q14. Count orders by status
+SELECT status, COUNT(*) AS total_orders
+FROM orders
+GROUP BY status;
+
+-- Q15. Products never ordered
+SELECT p.product_id, p.product_name
+FROM products p
+LEFT JOIN order_items oi ON p.product_id = oi.product_id
+WHERE oi.product_id IS NULL;
+
+-- Q16. Most expensive product in each category
+SELECT c.category_name, p.product_name, p.price
+FROM products p
+JOIN categories c ON p.category_id = c.category_id
+WHERE p.price = (
+    SELECT MAX(p2.price)
+    FROM products p2
+    WHERE p2.category_id = p.category_id
+);
+
+-- Q17. Payment summary
+SELECT payment_status, SUM(amount) AS amount
+FROM payments
+GROUP BY payment_status;
+
+-- Q18. Order status audit report
+SELECT *
+FROM order_status_log
+ORDER BY changed_at DESC;
+
+-- Q19. Customer and payment details
+SELECT
+    u.full_name,
+    o.order_id,
+    o.total_amount,
+    p.payment_method,
+    p.payment_status
+FROM users u
+JOIN orders o ON u.user_id = o.user_id
+JOIN payments p ON o.order_id = p.order_id;
+
+-- Q20. Monthly sales report
+SELECT
+    DATE_FORMAT(order_date,'%Y-%m') AS sales_month,
+    SUM(total_amount) AS monthly_sales,
+    COUNT(order_id) AS total_orders
+FROM orders
+WHERE status <> 'Cancelled'
+GROUP BY DATE_FORMAT(order_date,'%Y-%m')
+ORDER BY sales_month;
+
+-- ============================================================
+-- STORED PROCEDURE TEST
+-- ============================================================
+CALL sp_GetUserOrders(1);
+
+-- Example real-world order:
+-- CALL sp_CreateOrder(
+--     1,                  -- user_id
+--     2,                  -- product_id
+--     1,                  -- quantity
+--     'Kasturba Gandhi Marg, Delhi',
+--     'UPI'
+-- );
+
+-- ============================================================
+-- END OF PROJECT
+-- ============================================================
